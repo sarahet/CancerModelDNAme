@@ -1,0 +1,318 @@
+---
+title: Hyper CGI methylation visualization
+output: pdf_document
+params:
+  cgi_path: ""
+  sample_path: ""
+---
+
+<!--
+// ==========================================================================
+//                 Cancer model DNA methylation visualization               
+// ==========================================================================
+// Copyright (c) 2025, Sara Hetzel <hetzel @ molgen.mpg.de>
+// Copyright (c) 2025, Max-Planck-Institut für Molekulare Genetik
+// All rights reserved.
+//
+// This script is licensed under the BSD 3-Clause License.
+// See the LICENSE file distributed with this source for full terms.
+//
+// This script is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+// ==========================================================================
+// 
+// ==========================================================================
+-->
+
+```{r echo=FALSE, warning = FALSE, message = FALSE}
+library(ggplot2)
+library(knitr)
+```
+
+# Assessing CGI methylation of cancer models and primary tumors
+
+```{r echo=FALSE, warning = FALSE}
+## Parse arguments
+
+if (params$cgi_path == "") stop("Please provide path to CGI averages.")
+if (params$sample_path == "") stop("Please provide sample file in csv format.")
+```
+
+```{r echo=FALSE, warning = TRUE}
+################################################################################
+## Load data objects
+################################################################################
+
+load(file = "data-objects/prc2_cgis_human.RData")
+load(file = "data-objects/prc2_cgis_mouse.RData")
+load(file = "data-objects/metadata_human.RData")
+load(file = "data-objects/metadata_mouse_models.RData")
+load(file = "data-objects/common_hyper_cgi_across_tumor_types_array_any_purity.RData")
+load(file = "data-objects/hyper_cgi_per_tumor_type_array_any_purity.RData")
+load(file = "data-objects/cgi_hg19_mm10_mapping.RData")
+
+################################################################################
+## Define CGI sets
+################################################################################
+
+hyper_pancancer_human <- common_hyper_cgi_across_tumor_types_array_any_purity
+hyper_pancancer_mouse <- cgi_hg19_mm10_mapping$pancancer
+
+################################################################################
+## Define colors and shapes
+################################################################################
+
+colors_condition <- c("#979EA4", "#D1D3D4", "#7ACDCD", "#2FA19E")
+names(colors_condition) <- c("healthy", "healthy_sorted", "precursor", "tumor")
+
+shapes_condition <- c(19, 1, 2, 17)
+names(shapes_condition) <- c("healthy", "healthy_sorted", "precursor", "tumor")
+
+shapes_group <- c(19, 4)
+names(shapes_group) <- c("primary", "model")
+
+colors_type <- c("#3F007D", "#54278F", "#6A51A3", "#807DBA", "#9E9AC8", "#BCBDDC", "#DADAEB", "#7A0177", "#AE017E", "#F768A1", "#FA9FB5", "#FCC5C0", "#FDE0DD", "#8C2D04", "#CC4C02", "#EC7014", "#FE9929", "#FEC44F", "#FEE391", "#08306B", "#08519C", "#2171B5", "#4292C6", "#6BAED6", "#9ECAE1", "#C6DBEF")
+names(colors_type) <- c("T-ALL", "CESC", "B-ALL", "ESCA", "CHOL", "HNSC", "COAD", "PRAD", "BRCA", "PAAD", "GBM", "LUAD", "READ", "BLCA", "UCEC", "LUSC", "LAML", "SKCM", "LIHC", "STAD", "KIRC", "SARC", "PCPG", "KIRP", "THYM", "THCA")
+
+################################################################################
+## Load new samples
+################################################################################
+
+sample_sheet <- read.csv(params$sample_path, header = TRUE, stringsAsFactors = FALSE, row.names = 1)
+
+samples_human <- rownames(subset(sample_sheet, species == "human"))
+samples_mouse <- rownames(subset(sample_sheet, species == "mouse"))
+
+if (any(!sample_sheet$type %in% names(hyper_cgi_per_tumor_type_array_any_purity))) warning("One or more tumor types do not have a pre-defined hyper CGI set. Only the PRC2 and the pan-cancer hyper CGI set will be shown.")
+if (any(!sample_sheet$condition %in% c("healthy", "healthy_sorted", "precursor", "tumor"))) stop("Condition must be one of: 'healthy', 'healthy_sorted', 'precursor', 'tumor'.")
+if (any(!sample_sheet$group %in% c("primary", "model"))) stop("Group must be one of: 'primary', 'model'.")
+
+```
+
+Calculating metrics for `r  length(samples_human)` new human and `r  length(samples_mouse)` new mouse samples.
+
+Tumor types included in new data: `r  paste(unique(sort(sample_sheet$type)), sep = ", ")`.
+
+New sample summary per group, species and condition:
+
+```{r echo=FALSE, warning = FALSE}
+
+df_summary <- data.frame(table(sample_sheet[,c("condition", "species", "group")]))
+df_summary <- subset(df_summary, Freq != 0)
+colnames(df_summary) <- c("condition", "species", "group", "count")
+rownames(df_summary) <- NULL
+df_summary <- df_summary[,c("group", "species", "condition", "count")]
+kable(df_summary)
+```
+
+```{=latex}
+\newpage
+```
+
+```{r echo=FALSE, warning = FALSE}
+## Human
+cgi_files <- list.files(params$cgi_path, "avg_cgi", full.names = TRUE)
+avg_cgi <- lapply(cgi_files, read.table, stringsAsFactors = FALSE)
+names(avg_cgi) <- sapply(cgi_files, function(x) strsplit(basename(x), "avg_cgi_|\\.bed")[[1]][2])
+
+if (!all(rownames(sample_sheet) %in% names(avg_cgi))) stop("Sample names differ between sample sheet and CGI files.")
+
+## Load and merge CGIs - human
+
+df_cgi_summary_human <- data.frame(row.names = samples_human, type = sample_sheet[samples_human,"type"], condition = sample_sheet[samples_human,"condition"], group = sample_sheet[samples_human,"group"])
+
+if (length(samples_human) > 0)
+{
+    avg_cgi_human <- lapply(samples_human, function(x)
+    {
+        data <- avg_cgi[[x]]
+        colnames(data) <- c("chr", "start", "end", x)
+        return(data)
+    })
+
+    avg_cgi_human <- Reduce(function(x,y) merge(x = x, y = y, all.x = TRUE, all.y = TRUE), avg_cgi_human)
+    rownames(avg_cgi_human) <- paste(avg_cgi_human[,1], avg_cgi_human[,2], avg_cgi_human[,3], sep = "-")
+    avg_cgi_human <- avg_cgi_human[,-c(1:3)]
+
+    ## Fraction methylated
+    df_cgi_summary_human$class <- "new"
+
+    df_cgi_summary_human$fraction_meth_prc2 <- apply(avg_cgi_human[rownames(avg_cgi_human) %in% prc2_cgis_human,samples_human], 2, function(x) length(which(x > 0.2)) / length(na.omit(x)))
+    df_cgi_summary_human$fraction_meth_pancancer <- apply(avg_cgi_human[rownames(avg_cgi_human) %in% hyper_pancancer_human,samples_human], 2, function(x) length(which(x > 0.2)) / length(na.omit(x)))
+    df_cgi_summary_human$fraction_meth_tumor_type <- sapply(samples_human, function(x)
+    {
+        curr_type <- df_cgi_summary_human[x,"type"]
+        curr_data <- avg_cgi_human[rownames(avg_cgi_human) %in% hyper_cgi_per_tumor_type_array_any_purity[[curr_type]],x]
+        return(length(which(curr_data > 0.2)) / length(na.omit(curr_data)))
+    })
+
+    ## Median methylation
+    df_cgi_summary_human$median_meth_prc2 <- apply(avg_cgi_human[rownames(avg_cgi_human) %in% prc2_cgis_human,samples_human], 2, median, na.rm = TRUE)
+    df_cgi_summary_human$median_meth_pancancer <- apply(avg_cgi_human[rownames(avg_cgi_human) %in% hyper_pancancer_human,samples_human], 2, median, na.rm = TRUE)
+    df_cgi_summary_human$median_meth_tumor_type <- sapply(samples_human, function(x)
+    {
+        curr_type <- df_cgi_summary_human[x,"type"]
+        curr_data <- avg_cgi_human[rownames(avg_cgi_human) %in% hyper_cgi_per_tumor_type_array_any_purity[[curr_type]],x]
+        return(median(curr_data, na.rm = TRUE))
+    })
+}
+
+## Load and merge CGIs - mouse
+
+df_cgi_summary_mouse <- data.frame(row.names = samples_mouse, type = sample_sheet[samples_mouse,"type"], condition = sample_sheet[samples_mouse,"condition"], group = sample_sheet[samples_mouse,"group"])
+
+if (length(samples_mouse) > 0)
+{
+    avg_cgi_mouse <- lapply(samples_mouse, function(x)
+    {
+        data <- avg_cgi[[x]]
+        colnames(data) <- c("chr", "start", "end", x)
+        return(data)
+    })
+
+    avg_cgi_mouse <- Reduce(function(x,y) merge(x = x, y = y, all.x = TRUE, all.y = TRUE), avg_cgi_mouse)
+    rownames(avg_cgi_mouse) <- paste(avg_cgi_mouse[,1], avg_cgi_mouse[,2], avg_cgi_mouse[,3], sep = "-")
+    avg_cgi_mouse <- avg_cgi_mouse[,-c(1:3)]
+
+    ## Fraction methylated
+    df_cgi_summary_mouse$class <- "new"
+
+    df_cgi_summary_mouse$fraction_meth_prc2 <- apply(avg_cgi_mouse[rownames(avg_cgi_mouse) %in% prc2_cgis_mouse,samples_mouse], 2, function(x) length(which(x > 0.2)) / length(na.omit(x)))
+    df_cgi_summary_mouse$fraction_meth_pancancer <- apply(avg_cgi_mouse[rownames(avg_cgi_mouse) %in% hyper_pancancer_mouse,samples_mouse], 2, function(x) length(which(x > 0.2)) / length(na.omit(x)))
+    df_cgi_summary_mouse$fraction_meth_tumor_type <- sapply(samples_mouse, function(x)
+    {
+        curr_type <- df_cgi_summary_mouse[x,"type"]
+        curr_data <- avg_cgi_mouse[rownames(avg_cgi_mouse) %in% cgi_hg19_mm10_mapping[[curr_type]],x]
+        return(length(which(curr_data > 0.2)) / length(na.omit(curr_data)))
+    })
+
+    ## Median methylation
+    df_cgi_summary_mouse$median_meth_prc2 <- apply(avg_cgi_mouse[rownames(avg_cgi_mouse) %in% prc2_cgis_mouse,samples_mouse], 2, median, na.rm = TRUE)
+    df_cgi_summary_mouse$median_meth_pancancer <- apply(avg_cgi_mouse[rownames(avg_cgi_mouse) %in% hyper_pancancer_mouse,samples_mouse], 2, median, na.rm = TRUE)
+    df_cgi_summary_mouse$median_meth_tumor_type <- sapply(samples_mouse, function(x)
+    {
+        curr_type <- df_cgi_summary_mouse[x,"type"]
+        curr_data <- avg_cgi_mouse[rownames(avg_cgi_mouse) %in% cgi_hg19_mm10_mapping[[curr_type]],x]
+        return(median(curr_data, na.rm = TRUE))
+    })
+}
+
+################################################################################
+## Generate final data frames
+################################################################################
+
+## Columns of interest
+
+columns_of_interest <- c("type", "condition", "group", "class", "fraction_meth_prc2", "median_meth_prc2", "fraction_meth_pancancer", "median_meth_pancancer", "fraction_meth_tumor_type", "median_meth_tumor_type")
+
+## Combine information - human
+
+metadata_human$class <- "reference"
+
+df_cgi_summary_human_combined <- metadata_human[,columns_of_interest]
+if (length(samples_human) > 0)
+{
+    df_cgi_summary_human_combined <- rbind(metadata_human[,columns_of_interest], df_cgi_summary_human[,columns_of_interest])
+}
+df_cgi_summary_human_combined_prc2 <- df_cgi_summary_human_combined[,c("type", "condition", "group", "class", "fraction_meth_prc2", "median_meth_prc2")]
+df_cgi_summary_human_combined_pancancer <- df_cgi_summary_human_combined[,c("type", "condition", "group", "class", "fraction_meth_pancancer", "median_meth_pancancer")]
+df_cgi_summary_human_combined_tumor_type <- df_cgi_summary_human_combined[,c("type", "condition", "group", "class", "fraction_meth_tumor_type", "median_meth_tumor_type")]
+
+colnames(df_cgi_summary_human_combined_prc2) <- c("type", "condition", "group", "class", "fraction_meth", "median_meth")
+colnames(df_cgi_summary_human_combined_pancancer) <- c("type", "condition", "group", "class", "fraction_meth", "median_meth")
+colnames(df_cgi_summary_human_combined_tumor_type) <- c("type", "condition", "group", "class", "fraction_meth", "median_meth")
+
+df_cgi_summary_human_combined_prc2$cgi <- "PRC2"
+df_cgi_summary_human_combined_pancancer$cgi <- "Hyper pan-cancer"
+df_cgi_summary_human_combined_tumor_type$cgi <- "Hyper tumor type"
+
+df_cgi_summary_human_combined_stacked <- rbind(df_cgi_summary_human_combined_prc2, df_cgi_summary_human_combined_pancancer, df_cgi_summary_human_combined_tumor_type)
+df_cgi_summary_human_combined_stacked$cgi <- factor(df_cgi_summary_human_combined_stacked$cgi, levels = c("PRC2", "Hyper pan-cancer", "Hyper tumor type"))
+df_cgi_summary_human_combined_stacked$group <- factor(df_cgi_summary_human_combined_stacked$group, levels = c("primary", "model"))
+
+## Combine information - mouse
+
+metadata_mouse_models$class <- "reference"
+metadata_mouse_models$group <- "model"
+
+df_cgi_summary_mouse_combined <- metadata_mouse_models[,columns_of_interest]
+if (length(samples_mouse) > 0)
+{
+    df_cgi_summary_mouse_combined <- rbind(metadata_mouse_models[,c(colnames(df_cgi_summary_mouse))], df_cgi_summary_mouse)
+}
+
+df_cgi_summary_mouse_combined_prc2 <- df_cgi_summary_mouse_combined[,c("type", "condition", "group", "class", "fraction_meth_prc2", "median_meth_prc2")]
+df_cgi_summary_mouse_combined_pancancer <- df_cgi_summary_mouse_combined[,c("type", "condition", "group", "class", "fraction_meth_pancancer", "median_meth_pancancer")]
+df_cgi_summary_mouse_combined_tumor_type <- df_cgi_summary_mouse_combined[,c("type", "condition", "group", "class", "fraction_meth_tumor_type", "median_meth_tumor_type")]
+
+colnames(df_cgi_summary_mouse_combined_prc2) <- c("type", "condition", "group", "class", "fraction_meth", "median_meth")
+colnames(df_cgi_summary_mouse_combined_pancancer) <- c("type", "condition", "group", "class", "fraction_meth", "median_meth")
+colnames(df_cgi_summary_mouse_combined_tumor_type) <- c("type", "condition", "group", "class", "fraction_meth", "median_meth")
+
+df_cgi_summary_mouse_combined_prc2$cgi <- "PRC2"
+df_cgi_summary_mouse_combined_pancancer$cgi <- "Hyper pan-cancer"
+df_cgi_summary_mouse_combined_tumor_type$cgi <- "Hyper tumor type"
+
+df_cgi_summary_mouse_combined_stacked <- rbind(df_cgi_summary_mouse_combined_prc2, df_cgi_summary_mouse_combined_pancancer, df_cgi_summary_mouse_combined_tumor_type)
+df_cgi_summary_mouse_combined_stacked$cgi <- factor(df_cgi_summary_mouse_combined_stacked$cgi, levels = c("PRC2", "Hyper pan-cancer", "Hyper tumor type"))
+df_cgi_summary_mouse_combined_stacked$group <- factor(df_cgi_summary_mouse_combined_stacked$group, levels = c("primary", "model"))
+```
+
+## Human primaries and melanoma model - reference
+
+```{r echo=FALSE, warning = FALSE, crop = NULL, fig.width = 10, fig.height = 3.5, message = FALSE, results='hide', fig.keep='all', fig.align = "center"}
+ggplot(data = subset(df_cgi_summary_human_combined_stacked, class == "reference"), aes(x = median_meth, y = fraction_meth, color = condition, shape = group)) + geom_point(size = 2) + theme_classic() + xlab("Median CGI methylation") + ylab("Fraction methylated CGIs") + theme(axis.text=element_text(size=10), axis.title=element_text(size=12)) + coord_cartesian(xlim = c(0,1), ylim = c(0,1)) + scale_color_manual(values = colors_condition) + scale_shape_manual(values = shapes_group) + facet_grid(~cgi) 
+
+ggplot(data = subset(df_cgi_summary_human_combined_stacked, class == "reference"), aes(x = median_meth, y = fraction_meth, color = type, shape = condition)) + geom_point(size = 2) + theme_classic() + xlab("Median CGI methylation") + ylab("Fraction methylated CGIs") + theme(axis.text=element_text(size=10), axis.title=element_text(size=12)) + coord_cartesian(xlim = c(0,1), ylim = c(0,1)) + scale_color_manual(values = colors_type) + scale_shape_manual(values = shapes_condition) + facet_grid(~cgi) 
+
+```
+
+```{=latex}
+\newpage
+```
+
+`r  if (length(samples_human) > 0) {knitr::asis_output("## Human primaries and melanoma model - new\n")}`
+
+```{r echo=FALSE, warning = FALSE, crop = NULL, fig.width = 10, fig.height = 3.5, message = FALSE, results='hide', fig.keep='all', fig.align = "center"}
+
+if (length(samples_human) > 0)
+{
+    print(ggplot(data = subset(df_cgi_summary_human_combined_stacked, class == "reference"), aes(x = median_meth, y = fraction_meth, shape = group)) + geom_point(color = "grey96", size = 2) + theme_classic() + xlab("Median CGI methylation") + ylab("Fraction methylated CGIs") + theme(axis.text=element_text(size=10), axis.title=element_text(size=12)) + coord_cartesian(xlim = c(0,1), ylim = c(0,1)) + scale_color_manual(values = colors_condition) + scale_shape_manual(values = shapes_group) + facet_grid(~cgi) + geom_point(data = subset(df_cgi_summary_human_combined_stacked, class == "new"), aes(color = condition)))
+
+    print(ggplot(data = subset(df_cgi_summary_human_combined_stacked, class == "reference"), aes(x = median_meth, y = fraction_meth, shape = condition)) + geom_point(color = "grey96", size = 2) + theme_classic() + xlab("Median CGI methylation") + ylab("Fraction methylated CGIs") + theme(axis.text=element_text(size=10), axis.title=element_text(size=12)) + coord_cartesian(xlim = c(0,1), ylim = c(0,1)) + scale_color_manual(values = colors_type) + scale_shape_manual(values = shapes_condition) + facet_grid(~cgi) + geom_point(data = subset(df_cgi_summary_human_combined_stacked, class == "new"), aes(color = type)))
+}
+```
+
+```{=latex}
+\newpage
+```
+
+## Mouse models - reference
+
+```{r echo=FALSE, warning = FALSE, crop = NULL, fig.width = 10, fig.height = 3.5, message = FALSE, results='hide', fig.keep='all', fig.align = "center"}
+
+## Reference data
+
+ggplot(data = subset(df_cgi_summary_mouse_combined_stacked, class == "reference"), aes(x = median_meth, y = fraction_meth, color = condition, shape = group)) + geom_point(size = 2) + theme_classic() + xlab("Median CGI methylation") + ylab("Fraction methylated CGIs") + theme(axis.text=element_text(size=10), axis.title=element_text(size=12)) + coord_cartesian(xlim = c(0,1), ylim = c(0,1)) + scale_color_manual(values = colors_condition) + scale_shape_manual(values = shapes_group) + facet_grid(~cgi) 
+
+ggplot(data = subset(df_cgi_summary_mouse_combined_stacked, class == "reference"), aes(x = median_meth, y = fraction_meth, color = type, shape = condition)) + geom_point(size = 2) + theme_classic() + xlab("Median CGI methylation") + ylab("Fraction methylated CGIs") + theme(axis.text=element_text(size=10), axis.title=element_text(size=12)) + coord_cartesian(xlim = c(0,1), ylim = c(0,1)) + scale_color_manual(values = colors_type) + scale_shape_manual(values = shapes_condition) + facet_grid(~cgi) 
+```
+
+```{=latex}
+\newpage
+```
+
+`r  if (length(samples_mouse) > 0) {knitr::asis_output("## Mouse models - new\n")}`
+
+```{r echo=FALSE, warning = FALSE, crop = NULL, fig.width = 10, fig.height = 3.5, message = FALSE, results='hide', fig.keep='all', fig.align = "center"}
+
+if (length(samples_mouse) > 0)
+{
+    print(ggplot(data = subset(df_cgi_summary_mouse_combined_stacked, class == "reference"), aes(x = median_meth, y = fraction_meth, shape = group)) + geom_point(color = "grey96", size = 2) + theme_classic() + xlab("Median CGI methylation") + ylab("Fraction methylated CGIs") + theme(axis.text=element_text(size=10), axis.title=element_text(size=12)) + coord_cartesian(xlim = c(0,1), ylim = c(0,1)) + scale_color_manual(values = colors_condition) + scale_shape_manual(values = shapes_group) + facet_grid(~cgi) + ggtitle("Mouse models - new") + geom_point(data = subset(df_cgi_summary_mouse_combined_stacked, class == "new"), aes(color = condition)))
+
+    print(ggplot(data = subset(df_cgi_summary_mouse_combined_stacked, class == "reference"), aes(x = median_meth, y = fraction_meth, shape = condition)) + geom_point(color = "grey96", size = 2) + theme_classic() + xlab("Median CGI methylation") + ylab("Fraction methylated CGIs") + theme(axis.text=element_text(size=10), axis.title=element_text(size=12)) + coord_cartesian(xlim = c(0,1), ylim = c(0,1)) + scale_color_manual(values = colors_type) + scale_shape_manual(values = shapes_condition) + facet_grid(~cgi) + ggtitle("Mouse models - new") + geom_point(data = subset(df_cgi_summary_mouse_combined_stacked, class == "new"), aes(color = type)))
+
+}
+
+```
